@@ -1,31 +1,47 @@
+# Source of .github/workflows/arm64.yml in veriqa/arm64-build on GitHub (build/README.md). The forge
+# has no arm64 runners, so build/publish-artifacts.sh starts this workflow and pushes its image itself:
+# GitHub holds no registry credentials. A change here is copied to that repository by hand.
 name: arm64 image
-on: workflow_dispatch
+run-name: arm64 image ${{ inputs.version }} ${{ inputs.snapshot }}
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version of the release, without the v"
+        required: true
+        type: string
+      snapshot:
+        description: "Commit of the public repository under the tag v<version>"
+        required: true
+        type: string
 permissions:
   contents: read
 env:
-  VERSION: "0.7.1"
+  VERSION: ${{ inputs.version }}
+  SNAPSHOT: ${{ inputs.snapshot }}
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Get the tagged source
-        run: git clone --depth 1 --branch "v$VERSION" https://gitlab.com/veriqa/veriqa.git src
+        run: |
+          git clone --depth 1 --branch "v$VERSION" https://gitlab.com/veriqa/veriqa.git src
+          [ "$(git -C src rev-parse HEAD)" = "$SNAPSHOT" ]
       - name: Build
-        run: docker build --platform linux/arm64 --build-arg VERIQA_VERSION="$VERSION" -f src/build/docker/Dockerfile -t arm64-local src
+        run: docker build --platform linux/arm64 --build-arg VERIQA_VERSION="$VERSION" -f src/build/docker/Dockerfile -t "veriqa-arm64:$VERSION" src
       - name: Smoke test
         run: |
-          c=$(docker run -d -e ASPNETCORE_ENVIRONMENT=Development -e Veriqa__OpenIddict__Server__Issuer=https://localhost:8443 arm64-local)
+          c=$(docker run -d -e ASPNETCORE_ENVIRONMENT=Development -e Veriqa__OpenIddict__Server__Issuer=https://localhost:8443 "veriqa-arm64:$VERSION")
           ok=0
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if docker exec "$c" curl -fsS -o /dev/null http://localhost:8080/health/live; then ok=1; break; fi
             sleep 2
           done
           docker logs "$c" 2>&1 | tail -20
-          docker image inspect arm64-local --format '{{.Architecture}} {{index .Config.Labels "org.opencontainers.image.version"}}'
           docker rm -f "$c"
           [ "$ok" = 1 ]
       - name: Save the image
-        run: docker save arm64-local | gzip > image-arm64.tar.gz
+        run: docker save "veriqa-arm64:$VERSION" | gzip > image-arm64.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: image-arm64
