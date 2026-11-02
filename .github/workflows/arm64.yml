@@ -1,0 +1,34 @@
+name: arm64 image
+on: workflow_dispatch
+permissions:
+  contents: read
+env:
+  VERSION: "0.7.1"
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Get the tagged source
+        run: git clone --depth 1 --branch "v$VERSION" https://gitlab.com/veriqa/veriqa.git src
+      - name: Build
+        run: docker build --platform linux/arm64 --build-arg VERIQA_VERSION="$VERSION" -f src/build/docker/Dockerfile -t arm64-local src
+      - name: Smoke test
+        run: |
+          c=$(docker run -d -e ASPNETCORE_ENVIRONMENT=Development -e Veriqa__OpenIddict__Server__Issuer=https://localhost:8443 arm64-local)
+          ok=0
+          for i in $(seq 1 30); do
+            if docker exec "$c" curl -fsS -o /dev/null http://localhost:8080/health/live; then ok=1; break; fi
+            sleep 2
+          done
+          docker logs "$c" 2>&1 | tail -20
+          docker image inspect arm64-local --format '{{.Architecture}} {{index .Config.Labels "org.opencontainers.image.version"}}'
+          docker rm -f "$c"
+          [ "$ok" = 1 ]
+      - name: Save the image
+        run: docker save arm64-local | gzip > image-arm64.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-arm64
+          path: image-arm64.tar.gz
+          compression-level: 0
+          retention-days: 2
